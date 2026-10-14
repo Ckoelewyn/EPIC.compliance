@@ -14,7 +14,7 @@ from compliance_api.models.administrative_penalty import AdministrativePenalty a
 from compliance_api.models.administrative_penalty import AdministrativePenaltyInspectionRequirementMap
 from compliance_api.models.administrative_penalty import DecisionEnum, ReferralStatusEnum
 from compliance_api.models.order import Order as OrderModel
-from compliance_api.models.order import OrderInspectionRequirementMap
+from compliance_api.models.order import OrderInspectionRequirementMap, OrderReplaceStatusEnum, OrderStatusEnum
 from compliance_api.models.warning_letter import WarningLetter as WarningLetterModel
 from compliance_api.models.warning_letter import WarningLetterInspectionRequirementMap
 from tests.utilities.factory_scenario.inspection_requirement_scenario import InspectionRequirementScenario
@@ -1157,3 +1157,75 @@ def test_requirement_grid_filters_on_administrative_penalty_dm_decision(
         created_inspection,
         enf_stats="REFERRED_TO_DM,AP_ISSUED,AP_NOT_PROCEEDING",
     )
+
+
+@pytest.mark.parametrize(
+    "original_status,original_replace_status,replacement,expected_statuses",
+    [
+        # Rescinded directly: stays ORIGINAL and was always shown.
+        (OrderStatusEnum.RESCINDED, OrderReplaceStatusEnum.ORIGINAL, None, ["Rescinded"]),
+        # Rescinded by an issued replacement: both orders are shown.
+        (
+            OrderStatusEnum.RESCINDED,
+            OrderReplaceStatusEnum.REPLACED,
+            (OrderStatusEnum.OPEN, OrderReplaceStatusEnum.ORIGINAL),
+            ["Open", "Rescinded"],
+        ),
+        # Draft replacement not yet issued: only the original is shown.
+        (
+            OrderStatusEnum.OPEN,
+            OrderReplaceStatusEnum.ORIGINAL,
+            (OrderStatusEnum.CREATED, OrderReplaceStatusEnum.REPLACEMENT),
+            ["Open"],
+        ),
+    ],
+)
+def test_requirement_grid_shows_rescinded_orders(
+    client,
+    auth_header,
+    db,
+    created_inspection,
+    created_inspection_requirement,
+    created_order,
+    created_order_requirement_map,
+    original_status,
+    original_replace_status,
+    replacement,
+    expected_statuses,
+):
+    """Rescinded orders show on the grid whether rescinded directly or by replacement."""
+    _add_requirement_source_detail(created_inspection_requirement)
+    created_order.order_status = original_status
+    created_order.order_replace_status = original_replace_status
+    if replacement:
+        replacement_status, replacement_replace_status = replacement
+        replacement_order = OrderModel(
+            inspection_id=created_order.inspection_id,
+            issuing_officer_id=created_order.issuing_officer_id,
+            section_id=created_order.section_id,
+            order_number=f"{created_order.order_number}-R",
+            order_status=replacement_status,
+            order_replace_status=replacement_replace_status,
+            replacement_for_order_id=created_order.id,
+            is_active=True,
+            is_deleted=False,
+        )
+        db.session.add(replacement_order)
+        db.session.flush()
+        db.session.add(
+            OrderInspectionRequirementMap(
+                order_id=replacement_order.id,
+                inspection_requirement_id=created_inspection_requirement.id,
+                is_active=True,
+                is_deleted=False,
+            )
+        )
+    db.session.commit()
+
+    statuses = _get_grid_enforcement_statuses(client, auth_header, created_inspection)
+    assert sorted(statuses) == expected_statuses
+
+    rescinded = _get_grid_enforcement_statuses(
+        client, auth_header, created_inspection, enf_stats=OrderStatusEnum.RESCINDED.name
+    )
+    assert rescinded == [s for s in expected_statuses if s == "Rescinded"]

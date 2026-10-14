@@ -48,7 +48,7 @@ def get_requirement_order_sub_query():
             OrderInspectionRequirementMap.is_deleted.is_(False),
             Order.is_active.is_(True),
             Order.is_deleted.is_(False),
-            Order.order_replace_status == OrderReplaceStatusEnum.ORIGINAL,
+            Order.order_replace_status.is_distinct_from(OrderReplaceStatusEnum.REPLACEMENT),
         )
         .subquery("requirement_order")
     )
